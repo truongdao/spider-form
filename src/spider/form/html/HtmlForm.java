@@ -1,23 +1,26 @@
 package spider.form.html;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileReader;
+import java.io.InputStreamReader;
 import java.io.LineNumberReader;
+import java.net.MalformedURLException;
+import java.util.HashMap;
 import java.util.Map;
-
+import javax.swing.JDialog;
 import javafx.scene.web.WebEngine;
 import javafx.scene.web.WebEvent;
 import javafx.scene.web.WebView;
-import javafx.stage.Stage;
 import netscape.javascript.JSObject;
-import javafx.scene.layout.*;
 import javafx.scene.Scene;
-import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.concurrent.Worker.State;
+import javafx.embed.swing.JFXPanel;
 import javafx.event.EventHandler;
-import javafx.event.EventType;
-
 
 /**
  * Class for loading form html.
@@ -47,22 +50,32 @@ System.out.println("hello_from_web:"+form.getData("hello_from_web"));
     	
  * @author pika
  * 
+ * v1.2 - 3-Oct-2015 - allowed invoke form more than once
  * v1.0 - 2-Oct-2015
  */
 
-public class HtmlForm extends Application implements HtmlFormWebInf{
+public class HtmlForm {
+	public Map<String, Object> finput = new HashMap<String, Object>();
+	public Map<String,Object> foutput = new HashMap<String, Object>();
+	public JDialog frame = new JDialog();
 
+	//on fx thread
+	private WebView webView;
+	private WebEngine webEngine;
+	private String url_code =	"";
 
-	private static WebView webView;
-	private static WebEngine webEngine;
-	private static String url_code =	"";
+	//on swing thread
 
-	private static int loadByFile = -1; //-1: uninit, 1: true, 0: false
-	private static String title = null;
+	 private JFXPanel fxPanel;
+	
+	private int loadByFile = -1; //-1: uninit, 1: true, 0: false
+
 	/*****************************************************************************
 	 * Create blank form, content loaded later by load()
 	 */
-	public HtmlForm() { }	
+	public HtmlForm() { 
+		this(null);
+	}	
 	
 	/*****************************************************************************
 	 * Create form from url file/html code implicitly
@@ -70,8 +83,8 @@ public class HtmlForm extends Application implements HtmlFormWebInf{
 	 */
 	
 	public HtmlForm(String content) {
-		url_code = content;
-		loadByFile = -1;
+		this(content, false);
+		loadByFile = -1 ; //known content is url or html code
 	}
 	
 	/*****************************************************************************
@@ -82,8 +95,7 @@ public class HtmlForm extends Application implements HtmlFormWebInf{
 	 */
 	
 	public HtmlForm(String content, boolean bloadByFile) {
-		url_code =content;
-		loadByFile = (bloadByFile)? 1 : 0;
+		this("Form Fx", content, bloadByFile);
 	}
 
 	/*****************************************************************************
@@ -95,13 +107,19 @@ public class HtmlForm extends Application implements HtmlFormWebInf{
 	 */
 	
 	public HtmlForm(String title, String content, boolean bloadByFile) {
-		this.title = title;
 		url_code =content;
 		loadByFile = (bloadByFile)? 1 : 0;
+		
+		frame.setTitle(title);
+		frame.setModal(true);
+		fxPanel = new JFXPanel();
+		//frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.add(fxPanel);
+		frame.setSize(300, 200);
 	}
 	
 	public HtmlForm setTitle(String title){
-		this.title = title;
+		frame.setTitle(title);
 		return this;
 	}
 	/*****************************************************************************
@@ -112,6 +130,7 @@ public class HtmlForm extends Application implements HtmlFormWebInf{
 	 * @return - current form object, for quick code
 	 */
 	public HtmlForm putData(String name, Object obj){
+		//TODO Platform.runLater ??
        finput.put(name, obj);
        return this;
 	}
@@ -127,39 +146,6 @@ public class HtmlForm extends Application implements HtmlFormWebInf{
 		
 		return foutput.get(name);
 	}
-	
-	/*****************************************************************************
-	 * load content into form. Usually be used if constructed as blank form.
-	 * @param content
-	 * @return
-	 */
-	public HtmlForm load(String codeORpath){
-		 
-		
-		String all = "";
-
-		if(	(1 ==loadByFile) ||
-				((loadByFile == -1) && isLikelyAFilePath(codeORpath))
-			){
-        
-	        try{
-	            LineNumberReader rd = new LineNumberReader(new FileReader(codeORpath	));
-	            while(rd.ready()){  all += rd.readLine()+"\n";  }
-	            rd.close();
-	        } catch(Exception e){  	
-	        	System.err.println("#Error loading html file! "+codeORpath);
-	        	e.printStackTrace();
-	        }
-		}
-		else
-		{
-			all = codeORpath;
-		}
-		
-		webEngine.loadContent(all); 
-		
-		return this;
-	}
 
 	/*****************************************************************************
 	 * break the form, force to close without default return.
@@ -173,21 +159,43 @@ public class HtmlForm extends Application implements HtmlFormWebInf{
 	 * @return - this form
 	 */
 	public HtmlForm show(){
-		launch(null);
+        Platform.runLater(new Runnable() {
+            @Override
+            public void run() {
+                initFX(fxPanel);
+            }
+       });
+        
+        frame.setVisible(true);
 		return this;
 	}
+	
+	/*****************************************************************************
+	 * load content into form. Usually be used if constructed as blank form.<p>
+	 * Warn: not safe function.
+	 * @param content
+	 * @return
+	 */
+	@Deprecated
+	public HtmlForm load(String codeORpath){
+		url_code = codeORpath;
+		//if webview's running, load dynamically 
+        Platform.runLater(new Runnable() {
+            @Override
+            public void run() {
+                fxload(url_code);
+            }
+       });		
+		return this;
+	}
+	
+	
 	/*****************************************************************************/
-	/*    F O R   H T M L   F O R M   O N L Y                                    */
+	/*    F X   T H R E A D   F U N C T I O N S                                  */
 	/*****************************************************************************/
 
-	
-	@Override
-    public void start(Stage primaryStage) {
-		if(title==null)
-			primaryStage.setTitle("Form Fx");
-		else
-			primaryStage.setTitle(title);
-        
+	protected void initFX(JFXPanel fxPanel2) {
+
 		webView = new WebView();
 		webEngine = webView.getEngine(); 
 
@@ -202,7 +210,7 @@ public class HtmlForm extends Application implements HtmlFormWebInf{
                         		 ){
                              putDataInterfaces2WebEngine();
                          }
-                       
+                         
                      }
 
                  });
@@ -226,19 +234,47 @@ public class HtmlForm extends Application implements HtmlFormWebInf{
 			}
         	 
          });
-         
-         load(url_code);  
+        
          
         MyBrowser myBrowser = new MyBrowser(webView);
         Scene scene = new Scene(myBrowser, 640, 480);
          
-        primaryStage.setScene(scene);
-        primaryStage.show();
+        fxPanel2.setScene(scene);
+        fxload(url_code);  
     }
 	
+	double pwidth,pheight;
 	
-	/*****************************************************************************/
-	/*    I N T E R N A L   U T I L S                                            */
+	/*****************************************************************************
+	 * load content into form. Usually be used if constructed as blank form.
+	 * @param content
+	 * @return
+	 */
+	private HtmlForm fxload(String codeORpath){
+		 
+		
+		String all = "";
+
+		if(	(1 ==loadByFile) ||
+				((loadByFile == -1) && isLikelyAFilePath(codeORpath)))
+		{
+			File f = new File(codeORpath);
+			try {
+				webEngine.load(f.toURI().toURL().toString());
+			} catch (MalformedURLException e) {
+	        	System.err.println("#Error loading html file! "+codeORpath);
+	        	e.printStackTrace();
+			}
+		}
+		else
+		{
+			all = codeORpath;
+			webEngine.loadContent(all); 
+		}
+
+		return this;
+	}
+		
 	/*****************************************************************************/
 
 	private void putDataInterfaces2WebEngine() {
@@ -253,7 +289,7 @@ public class HtmlForm extends Application implements HtmlFormWebInf{
 		 
 		 //put output containter
 		 window.setMember("foutput", foutput);
-		 window.setMember("form", (HtmlFormWebInf)HtmlForm.this);
+		 window.setMember("form", HtmlForm.this);
 	}	
 	
 	private boolean isLikelyAFilePath(String url){
@@ -272,10 +308,6 @@ public class HtmlForm extends Application implements HtmlFormWebInf{
 
 		return result;
 	}
-	
-	/*****************************************************************************/	
-	
-
 	
 	/*****************************************************************************/	
 	
